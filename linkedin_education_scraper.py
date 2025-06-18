@@ -3,8 +3,7 @@ import json
 import csv
 import signal
 import sys
-from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
+from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -16,11 +15,10 @@ import pandas as pd
 import os
 
 class LinkedInEducationScraper:
-    def __init__(self, min_year=2020):
+    def __init__(self):
         self.driver = None
         self.posts_data = []
         self.interrupted = False
-        self.min_year = min_year
         
         # Set up signal handler for graceful interruption
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -344,65 +342,27 @@ class LinkedInEducationScraper:
             print(f"Error searching for '{keyword}': {e}")
             return False
     
-    def parse_post_date(self, date_text):
-        """Parse LinkedIn date text into datetime object"""
-        try:
-            # Handle relative dates (e.g., "2 days ago")
-            if "hour" in date_text or "minute" in date_text or "second" in date_text:
-                return datetime.now().date()
-            elif "day" in date_text:
-                days = int(date_text.split()[0])
-                return (datetime.now() - timedelta(days=days)).date()
-            elif "week" in date_text:
-                weeks = int(date_text.split()[0])
-                return (datetime.now() - timedelta(weeks=weeks)).date()
-            elif "month" in date_text:
-                months = int(date_text.split()[0])
-                return (datetime.now() - relativedelta(months=months)).date()
-            elif "year" in date_text:
-                years = int(date_text.split()[0])
-                return (datetime.now() - relativedelta(years=years)).date()
-            
-            # Handle absolute dates (e.g., "September 2020")
-            date_formats = [
-                "%B %Y",  # "September 2020"
-                "%b %Y",  # "Sep 2020"
-                "%m/%d/%Y",  # "09/15/2020"
-                "%Y-%m-%d"  # ISO format
-            ]
-            
-            for fmt in date_formats:
-                try:
-                    return datetime.strptime(date_text, fmt).date()
-                except ValueError:
-                    continue
-            
-            return None
-        except Exception as e:
-            print(f"Warning: Could not parse date '{date_text}': {e}")
-            return None
-    
     def extract_post_data(self, post_element, keyword):
-        """Extract data from a single post element with year filtering"""
-        post_data = {
-            'keyword': keyword,
-            'scraped_at': datetime.now().isoformat(),
-            'content_type': 'post',
-            'post_id': '',
-            'author_name': '',
-            'author_title': '',
-            'post_text': '',
-            'post_url': '',
-            'likes_count': '',
-            'comments_count': '',
-            'reposts_count': '',
-            'post_date': '',
-            'comment_author': '',
-            'comment_text': '',
-            'comment_date': ''
-        }
-        
+        """Extract data from a single post element"""
         try:
+            post_data = {
+                'keyword': keyword,
+                'scraped_at': datetime.now().isoformat(),
+                'content_type': 'post',  # New field to distinguish posts from comments
+                'post_id': '',  # Will help group comments with posts
+                'author_name': '',
+                'author_title': '',
+                'post_text': '',
+                'post_url': '',
+                'likes_count': '',
+                'comments_count': '',
+                'reposts_count': '',
+                'post_date': '',
+                'comment_author': '',  # For comments
+                'comment_text': '',    # For comments
+                'comment_date': ''     # For comments
+            }
+            
             print(f"     Extracting from post element: {post_element.tag_name if hasattr(post_element, 'tag_name') else 'unknown'}")  # Debug
             
             # Extract author name with multiple selectors
@@ -558,28 +518,14 @@ class LinkedInEducationScraper:
                 "time[datetime]"
             ]
             
-            post_date = None
             for selector in date_selectors:
                 try:
                     date_element = post_element.find_element(By.CSS_SELECTOR, selector)
-                    date_text = date_element.text.strip()
-                    if date_text:
-                        post_date = self.parse_post_date(date_text)
-                        if post_date:
-                            break
+                    post_data['post_date'] = date_element.text.strip()
+                    if post_data['post_date']:
+                        break
                 except NoSuchElementException:
                     continue
-            
-            if not post_date:
-                print("     Warning: Could not extract post date")
-                return None  # Skip if we can't determine the date
-            
-            # Apply year filter
-            if post_date.year < self.min_year:
-                print(f"     Skipping post from {post_date.year} (before {self.min_year})")
-                return None
-            
-            post_data['post_date'] = post_date.isoformat()
             
             # Final debug summary
             extracted_fields = sum(1 for field in ['author_name', 'post_text', 'author_title', 'post_url'] 
@@ -775,14 +721,13 @@ class LinkedInEducationScraper:
         return text
      
     def scrape_posts(self, keyword, max_posts=40):
-        """Scrape posts with year filtering"""
+        """Scrape posts for a specific keyword"""
         posts_collected = []
         scroll_pause_time = 3
         last_height = self.driver.execute_script("return document.body.scrollHeight")
         no_new_posts_count = 0
-        skipped_due_to_date = 0
         
-        print(f"Starting to scrape {max_posts} posts for '{keyword}' from {self.min_year} or later...")
+        print(f"Starting to scrape {max_posts} posts for '{keyword}'...")
         
         while len(posts_collected) < max_posts and not self.interrupted:
             try:
@@ -835,12 +780,14 @@ class LinkedInEducationScraper:
                     if len(posts_collected) >= max_posts:
                         break
                     
+                    # Skip posts we've already processed
+                    if i < previous_count:
+                        continue
+                    
                     try:
                         post_data = self.extract_post_data(post_element, keyword)
-                        if not post_data:  # None means it was skipped due to date
-                            skipped_due_to_date += 1
-                            continue
-                            
+                        print(f"   Raw post data: {post_data}")  # Debug line
+                        
                         if post_data:
                             # Clean all text fields to fix encoding issues
                             text_fields = ['author_name', 'author_title', 'post_text']
@@ -934,10 +881,6 @@ class LinkedInEducationScraper:
                         break
                     last_height = new_height
                     
-                # Add to the console output
-                if skipped_due_to_date > 0:
-                    print(f"   Posts skipped due to date: {skipped_due_to_date}")
-                
             except Exception as e:
                 print(f"Error during scraping for '{keyword}': {e}")
                 break
@@ -1127,112 +1070,49 @@ def main():
     print("="*50)
     print("Warning  IMPORTANT: Press Ctrl+C at any time to stop and save collected data")
     print("="*50)
-
+    
+    # Comprehensive keywords for UAE education
     default_keywords = [
-        # Education Segments & Pathways
-        "government schools for expats", "Emirati vs expatriate students", "vocational education stigma",
-        "lack of apprenticeships", "no shop classes", "dignity of labour", "blue-collar skills gap",
-        "zero paths for trades", "technical high schools", "TVET", "learn a trade",
-        "apprenticeship opportunities", "manual skills training", "DIY culture",
-        "career counseling in schools", "academic streaming", "alternative education pathways",
-        "homeschooling in the UAE", "hybrid learning model", "distance learning acceptance",
-        "community colleges", "diploma vs degree", "study abroad or local",
-        "scholarship abroad aspirations", "government scholarship", "foreign university branch campuses",
-        "local vs overseas degrees", "international accreditation", "foundation year",
-        "#StudyInUAE", "#StudyAbroad", "brain drain", "youth unemployment",
-        "education-to-employment pathway", "lifelong learning culture", "adult education classes",
-        "reskilling and upskilling", "continuing education programs", "graduate studies vs work",
-        "#UAEgraduates", "#Emiratization", "STEM vs humanities debate", "women in STEM education",
-        "coding in schools initiative", "early childhood education importance", "KG admissions competition",
+        # Education System & Schools
+        "UAE education system", "Best schools in Dubai", "Best schools in Abu Dhabi",
+        "UAE school rankings", "KHDA ratings", "ADEK inspections", "KHDA",
+        "UAE public vs private schools", "UAE school holidays", "UAE school calendar",
         
-        # Curriculum & School Networks
-        "British curriculum", "American curriculum", "IB curriculum", "Indian curriculum", "MoE curriculum",
-        "weaker curriculum criticism", "internationally recognized qualifications", "curriculum standardization debate",
-        "IGCSE vs A-Levels", "AP exams vs A-levels", "EmSAT vs SAT", "grade inflation concerns",
-        "rigorous vs easy curriculum", "curriculum overload", "rote curriculum vs creative curriculum",
-        "bilingual curriculum", "Arabic curriculum quality", "STEM curriculum focus", "Moral Education program",
-        "inclusive education curriculum", "curriculum reform initiatives", "#BritishVsAmerican", "#IBschools",
-        "#CBSEtopper", "faith-based curriculum", "curriculum adaptation for expats", "cultural studies in curriculum",
-        "school network reputation", "GEMS Education schools", "Taaleem schools", "Aldar Academies", "SABIS network",
-        "elite schools", "premium schools vs budget schools", "not-for-profit schools", "school rankings and ratings",
-        "KHDA rating Outstanding", "ADEK school ratings", "school report card", "school chains vs independent schools",
-        "#ADEK", "#DubaiSchools", "#AbuDhabiSchools", "Outstanding schools list", "Weak rated schools",
-        "curriculum switching", "international branch campuses", "university ranking concerns",
+        # Higher Education & Universities
+        "Best universities in UAE", "UAE university rankings", "Study in Dubai",
+        "Study in Abu Dhabi", "UAE scholarships", "UAE student visa",
+        "Masters degree UAE", "PhD in UAE", "MBBS in UAE", "Engineering universities UAE",
+        "Business schools UAE",
         
-        # Affordability & Financing
-        "high tuition fees", "soaring school fees", "skyrocketing tuition costs", "ever-increasing fees",
-        "annual fee hike", "KHDA fee increase cap", "#SchoolFees", "#FeeHike", "expensive private schools",
-        "elite school fees > AED 100k", "over 40% income on education", "insanely expensive schools",
-        "unaffordable education", "education cost crunch", "financial burden on parents",
-        "hurting parents’ wallets", "additional burden on families", "making ends meet",
-        "significant challenge for parents", "cost of living vs school fees", "stagnant salaries vs rising fees",
-        "salaries not keeping up", "middle-class struggle", "sacrificing lifestyle for fees",
-        "budget strain for schooling", "planning and calculations for fees", "taking personal loans for tuition",
-        "dipping into savings", "education loans and debt", "bank loans for school", "credit card for fees",
-        "second job for school fees", "mortgage vs education dilemma", "#AffordableEducation",
-        "calls for fee regulation", "fee cap policy", "scholarship demand",
-        "government school as affordable alternative", "voucher or subsidy calls", "PTA discussions on fees",
-        "value for money question", "quality vs cost debate", "breaking the bank for education",
-        "draining savings for school", "#EducationCost", "hidden school costs", "pricey school trips",
-        "fundraising for tuition", "charity schools", "not-for-profit low fee schools", "sibling discounts issues",
-        "#BackToSchool",
+        # School Fees & Costs
+        "Dubai school fees", "Abu Dhabi school fees", "Most expensive schools UAE",
+        "Cheapest schools UAE", "UAE education cost", "School fee increase UAE",
+        "School payment plans UAE", "Is UAE education worth it?", "School fees expensive",
         
-        # Regulation, Ratings & Policy
-        "school compliance rules", "parent-school contract", "#ParentSchoolContract", "binding agreement",
-        "mutual responsibilities", "parent code of conduct", "transparency in fees", "publish fee structure",
-        "schools face penalties", "legal consequences for schools", "school licensing issues", "regulator crackdown",
-        "school closure policy", "schools shut down for poor quality", "failing school closure",
-        "zero-tolerance for weak schools", "quality benchmarks enforcement", "student welfare priority",
-        "teacher qualification requirements", "licensing teachers", "curriculum approval by authorities",
-        "exam rules", "#KHDA updates", "#ADEK announcements", "ministry directives",
-        "federal education law changes", "new school openings approvals", "tuition fee freeze",
-        "COVID-era policies", "attendance enforcement", "absence penalties", "#ESE",
-        "inclusion mandates", "Emiratization in private schools", "school safety regulations", "bus safety rules",
-        "school building codes", "#EducationPolicy", "#SchoolReform", "international benchmarks",
-        "moral education policy", "Islamic values in schools", "language policy",
-        "higher education accreditation rules", "student visa regulations", "#UAEEducationStrategy",
+        # Curriculum & Teaching
+        "IB schools UAE", "British curriculum UAE", "American schools UAE",
+        "CBSE schools UAE", "Indian schools Dubai", "UAE MoE curriculum",
+        "UAE homeschool options", "UAE online learning", "UAE teacher salaries",
+        "UAE tutoring services",
         
-        # Challenges & Public Concerns
-        "school bullying", "bullying epidemic", "#StopBullying", "#JusticeForRashid", "cyberbullying at school",
-        "student mental health", "social media addiction", "screen time concerns", "online distractions in class",
-        "decline in respect", "lack of respect for teachers", "teacher vs parent blame",
-        "parent-school communication gaps", "safety in schools", "student safety on campus",
-        "school bus safety", "children left in bus", "harsh punishments", "overstrict school rules",
-        "zero tolerance policies debate", "attendance punishment", "pupils turned away for absence",
-        "denied textbooks as punishment", "overloading students", "excessive homework", "exam stress on kids",
-        "pressure cooker environment", "tutoring dependency", "rote memorization culture",
-        "lack of creativity in learning", "spoon-feeding vs critical thinking", "outdated teaching methods",
-        "large class sizes", "overcrowded classrooms", "student-to-teacher ratio", "teacher shortage",
-        "inexperienced teachers", "high teacher turnover", "low teacher morale",
-        "special needs inclusion problems", "support for people of determination",
-        "inaccessible school facilities", "expat kids and Arabic language", "forgotten Arabic by kids",
-        "Arabic teaching quality", "Arabic is boring", "loss of cultural identity",
-        "parents worry about identity", "Western vs local cultural values", "moral education concerns",
-        "cheating in exams", "exam paper leaks", "#Cheating", "devices banned in exams",
-        "academic honesty issues", "Covid learning loss", "learning gaps post-pandemic",
+        # Parent & Student Concerns
+        "UAE school admissions", "Waiting lists Dubai schools", "School transfers UAE",
+        "Bullying in UAE schools", "UAE school bus services", "UAE school uniforms",
+        "After-school activities UAE", "Best nurseries in Dubai", "UAE parent reviews",
         
-        # Student Experience & Outcomes
-        "student well-being", "student happiness index", "#StudentWellbeing", "#StudentMentalHealth",
-        "anxiety and depression", "counseling in schools", "exam stress crisis", "test anxiety issues",
-        "pressure to get high marks", "parental pressure on kids", "fear of failure", "burnout among students",
-        "hiding marks from parents", "shame and stress over grades", "perfectionism in students",
-        "competition among students", "unrealistic expectations", "all-round development vs rote",
-        "rote learning criticism", "lack of critical thinking", "creativity and innovation", "spoon-feeding education",
-        "exam-driven learning", "marks do not define you", "alternative assessment",
-        "project-based learning calls", "skills for future", "21st-century skills gap", "soft skills deficit",
-        "graduates lack practical skills", "theory vs practice gap", "graduates not job-ready",
-        "unemployable graduates", "underemployment of grads", "#SkillsGap", "#GraduateEmployability",
-        "mismatch between education and jobs", "industry collaboration needed",
-        "internship opportunities", "vocational vs academic outcomes", "higher education quality",
-        "university ranking worries", "international test scores", "UAE PISA results discussion",
-        "global competitiveness of students", "innovation in education", "entrepreneurial skills in students",
-        "success stories", "scholarships for top students", "future of work preparedness", "#FutureSkills",
-        "lifelong learning mindset", "learning agility and resilience", "student voice and agency",
-        "student engagement", "drop-out rates"
+        # Education Policies & Reforms
+        "UAE education law", "New school regulations UAE", "UAE Emiratization in schools",
+        "UAE education future", "UAE 2030 education plan", "AI in UAE schools",
+        "UAE coding in schools", "UAE STEM education",
+        
+        # Exams & Assessments
+        "UAE standardized testing", "PISA results UAE", "TIMSS UAE", "UAE board exams",
+        "IGCSE UAE", "A-levels Dubai", "SAT centers UAE", "IELTS UAE",
+        
+        # Specialized Education
+        "UAE special needs schools", "Autism schools Dubai", "Gifted programs UAE",
+        "Vocational training UAE", "UAE adult education", "UAE part-time degrees"
     ]
-
-        
-        # Comprehensive keywords for UAE education
     
     print(f"Comprehensive UAE education keywords ({len(default_keywords)} total):")
     print("Categories: School Rankings, Universities, Fees, Curriculum, Policies, Exams, etc.")
