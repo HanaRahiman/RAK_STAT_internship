@@ -1,5 +1,5 @@
 # RAK_STAT_internship
-# 📊 UAE Socio-Economic Sentiment Analysis on Education
+# UAE Socio-Economic Sentiment Analysis on Education
 
 This project focuses on collecting and analyzing public sentiment on education in the UAE. It gathers text data from multiple platforms—ranging from social media and professional networks to news outlets—to understand challenges, affordability, policy opinions, and student experiences.
 
@@ -32,9 +32,4 @@ The goal is to support data-driven education policy recommendations by capturing
 
 ---
 
-## 🚀 How to Run
 
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/yourusername/uae-education-sentiment.git
-   cd uae-education-sentiment
